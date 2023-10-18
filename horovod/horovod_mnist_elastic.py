@@ -4,12 +4,12 @@ import torch.nn as nn
 from torchvision import transforms, datasets
 import torch.optim as optim
 
-import itertools
+import math
 
 import horovod.torch as hvd
 
 # HYPERPARAMETERS
-epochs = 30
+epochs = 15
 batches_per_commit = 30
 lr = 0.01
 
@@ -38,7 +38,7 @@ hvd.init()
 model = Net()
 
 # Initialize optimizer
-optimizer = optim.SGD(model.parameters(), lr=0.01 * hvd.size())
+optimizer = optim.AdamW(model.parameters(), lr=0.01/math.sqrt(hvd.size()))
 optimizer = hvd.DistributedOptimizer(optimizer, named_parameters=model.named_parameters())
 
 def get_dataset():
@@ -70,9 +70,7 @@ def train(state):
 
                 if state.batch % batches_per_commit == 0:
                     state.commit()
-                    print(f'Processed batch {state.batch}/{len(train_loader)}')
-                    print(f"Commited batch {state.batch} at epoch {state.epoch} with loss {loss.item()}")
-                    print(f'Number of processes working: {hvd.size()} Current Rank: {hvd.rank()}')
+                    print(f"Batch: {state.batch}/{len(train_loader)} | Epoch: {state.epoch} | Loss: {loss.item()} | Lr: {optimizer.param_groups[0]['lr']}")
                     
                 state.batch = batch_idx
         state.batch = 0
@@ -81,10 +79,30 @@ def train(state):
         
 def on_state_reset():
     for param_group in optimizer.param_groups:
-        param_group['lr'] = lr * hvd.size()
+        param_group['lr'] = lr/math.sqrt(hvd.size())
+        
+        
+def test():
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    test_dataset = datasets.MNIST('mnist_data/', train=False, download=True, transform=transform)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=128)
+    
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for images, labels in test_loader:
+            outputs = model(images)
+            
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    print(f'Accuracy: {(correct/total)*100:.2f}%')
 
 state = hvd.elastic.TorchState(model, optimizer, batch=0, epoch=0)
 state.register_reset_callbacks([on_state_reset])
 train(state)
-
+test()
 # Example: horovodrun -np 2 --min-np=1 --blacklist-cooldown-range 15 30 --host-discovery-script ~/scripts/discover_hosts.sh python3 horovod_mnist_elastic.py
