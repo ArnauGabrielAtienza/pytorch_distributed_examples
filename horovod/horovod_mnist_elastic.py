@@ -70,7 +70,7 @@ def train(state):
 
                 if state.batch % batches_per_commit == 0:
                     state.commit()
-                    print(f"Batch: {state.batch}/{len(train_loader)} | Epoch: {state.epoch} | Loss: {loss.item()} | Lr: {optimizer.param_groups[0]['lr']}")
+                    print(f"Worker: {hvd.rank()}/{hvd.size()} | Batch: {state.batch}/{len(train_loader)} | Epoch: {state.epoch} | Loss: {loss.item()}")
                     
                 state.batch = batch_idx
         state.batch = 0
